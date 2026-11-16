@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.env
+.env.*
+.streamlit/secrets.toml
+
+# Keep downloaded datasets local; upload data through the app when needed.
+dataset/*
+!dataset/README.md
+
+.DS_Store
+Thumbs.db
