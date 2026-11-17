@@ -1366,7 +1366,9 @@ def main():
 
         st.caption(f"Bảng đang phân tích: `{source_filename}` · {len(rows):,} dòng · {len(headers)} cột")
         with st.expander("Xem trước 5 dòng và tiêu đề cột", expanded=False):
-            st.dataframe([dict(zip(headers, row)) for row in rows[:5]], hide_index=True)
+            # Avoid Streamlit's dataframe/PyArrow path: some managed Windows
+            # installs block the native pyarrow._compute DLL via App Control.
+            st.html("<div style='overflow-x:auto'>" + _rossmann_table(headers, rows[:5]) + "</div>")
 
         with st.sidebar:
             st.divider()
