@@ -22,16 +22,27 @@ Khi tải `train.csv` Rossmann hoặc ZIP bộ dữ liệu, ứng dụng nhận 
 
 Với mọi tệp khác, ứng dụng dùng phần ánh xạ cột chung thay vì yêu cầu tên cột cố định.
 
-## Chạy trên Windows
+## Chạy dự án trên Windows, macOS và Linux
 
-Tại Command Prompt:
+Cài Python, mở terminal ngay tại thư mục dự án (thư mục có `app.py`), sau đó tạo môi trường ảo và cài thư viện cần thiết.
 
-```bat
-cd /d C:\CTU\CTU_school\hk1nam4\BI\smart_learning
-C:\Users\Admin\AppData\Local\Python\pythoncore-3.14-64\python.exe -m streamlit run app.py
+**Windows (PowerShell):**
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m streamlit run app.py
 ```
 
-Ứng dụng mở ở địa chỉ Local URL Streamlit in ra, thường là `http://localhost:8501`. Môi trường hiện tại chỉ cần Streamlit; dự án không yêu cầu cài NumPy/pandas/scikit-learn/XGBoost.
+**macOS hoặc Linux:**
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m streamlit run app.py
+```
+
+Các lệnh dùng đường dẫn tương đối trong thư mục dự án, không phụ thuộc vị trí cài Python trên máy. Streamlit sẽ in địa chỉ ứng dụng trong terminal, thường là `http://localhost:8501`. Dự án chỉ cần Streamlit; không yêu cầu NumPy/pandas/scikit-learn/XGBoost.
 
 ## Dashboard tương tác
 
@@ -39,7 +50,7 @@ Thanh điều hướng trên cùng chia nội dung thành các trang riêng đ�
 
 - **Tổng quan:** KPI trong kỳ, xu hướng doanh thu, cửa hàng nổi bật và so sánh promo.
 - **Xu hướng:** chọn doanh thu/khách hàng, xem biểu đồ theo ngày/tuần/tháng và bảng số liệu.
-- **Khám phá biểu đồ:** chọn kiểu đường, vùng, cột, thanh ngang, tròn, treemap, histogram, phân tán, heatmap hoặc bảng; lựa chọn thay đổi theo góc nhìn và dữ liệu.
+- **Khám phá biểu đồ:** chọn kiểu đường, trung bình trượt, vùng, cột, thanh ngang, tròn, treemap, Pareto, tỷ trọng %, histogram, phân tán, heatmap hoặc bảng; biểu đồ thay đổi theo góc nhìn và dữ liệu.
 - **Cửa hàng:** xếp hạng trong vùng lọc, xem chi tiết cửa hàng đã chọn và lịch sử theo thứ.
 - **Khuyến mãi:** so sánh ngày promo, ngày lễ và ngày thường; đây là phân tích mô tả.
 - **Dự báo:** biểu đồ thực tế/holdout/tương lai, so sánh mô hình, bảng dự báo và tải CSV.
@@ -54,6 +65,7 @@ Dashboard dữ liệu chung có các trang Tổng quan, Xu hướng, Khám phá 
 - **Tệp bảng thông thường:** Linear Regression và Random Forest dự báo chuỗi chỉ tiêu đã tổng hợp theo ngày/tuần/tháng, sử dụng độ trễ và đặc trưng thời gian.
 - **Rossmann:** ngoài hai mô hình trên, có Seasonal Baseline; Linear Regression và Random Forest sử dụng thêm trạng thái mở cửa, promo và ngày lễ.
 - **Kiểm định:** giữ các kỳ cuối làm holdout theo thứ tự thời gian; không xáo trộn dữ liệu. Báo cáo WAPE, MAE và RMSE; Rossmann có thêm RMSPE.
+- **Đánh giá trực quan:** trang Tổng quan tóm tắt xu hướng giữa hai nửa lịch sử, mức tập trung ở các nhóm dẫn đầu, so sánh dự báo với các kỳ gần đây và sai số holdout. Trong Khám phá biểu đồ, Pareto và tỷ trọng làm rõ đóng góp của từng nhóm; trung bình trượt giúp tách xu hướng khỏi dao động ngắn hạn.
 
 ## Nguồn, làm sạch và giới hạn
 

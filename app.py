@@ -21,6 +21,7 @@ NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
       "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
       "rel": "http://schemas.openxmlformats.org/package/2006/relationships"}
 DERIVED_REVENUE = "Doanh thu (tự tính: đơn giá × số lượng)"
+CHART_COLORS = ["#2563EB", "#F97316", "#059669", "#7C3AED", "#DC2626", "#0891B2"]
 
 
 def _column_number(reference: str) -> int:
@@ -251,6 +252,8 @@ def _aggregate_uploaded_data(headers, rows, date_column, metric_column, quantity
     daily_quantity = defaultdict(float)
     group_metric = defaultdict(float)
     group_quantity = defaultdict(float)
+    group_daily_metric = defaultdict(lambda: defaultdict(float))
+    group_daily_quantity = defaultdict(lambda: defaultdict(float))
     orders = set()
     valid_rows = 0
     quantity_selected = quantity_column != "(Bỏ qua)" and quantity_column in positions and quantity_column != metric_column
@@ -279,6 +282,8 @@ def _aggregate_uploaded_data(headers, rows, date_column, metric_column, quantity
         daily_quantity[parsed_day] += quantity
         group_metric[group] += metric
         group_quantity[group] += quantity
+        group_daily_metric[group][parsed_day] += metric
+        group_daily_quantity[group][parsed_day] += quantity
         if order_selected:
             order_id = str(cell(row, order_column)).strip()
             if order_id:
@@ -290,6 +295,9 @@ def _aggregate_uploaded_data(headers, rows, date_column, metric_column, quantity
         "daily_revenue": {day.isoformat(): value for day, value in daily_metric.items()},
         "daily_quantity": {day.isoformat(): value for day, value in daily_quantity.items()},
         "country_revenue": dict(group_metric), "country_quantity": dict(group_quantity),
+        "group_daily_revenue": {group: {day.isoformat(): value for day, value in by_day.items()} for group, by_day in group_daily_metric.items()},
+        "group_daily_quantity": {group: {day.isoformat(): value for day, value in by_day.items()} for group, by_day in group_daily_quantity.items()},
+        "has_group": group_selected,
         "orders": len(orders) if order_selected else valid_rows, "rows": valid_rows,
         "source": f"Tệp tải lên · {filename}", "market_label": group_column if group_selected else "Nhóm",
         "metric_label": "Doanh thu tính từ đơn giá × số lượng" if metric_is_derived else metric_column,
@@ -328,6 +336,35 @@ def make_series(data: dict, frequency: str, target: str) -> tuple[list[date], li
         values.append(totals.get(current, 0.0))
         current = _next_period(current, frequency)
     return dates, values
+
+
+def _uploaded_area_series(data: dict, frequency: str, target: str, limit: int = 6):
+    """Return top group time series for a stacked area chart, with a combined remainder."""
+    field = "group_daily_revenue" if target == "Revenue" else "group_daily_quantity"
+    totals = data.get("country_revenue" if target == "Revenue" else "country_quantity", {})
+    groups = data.get(field, {})
+    top_groups = [name for name, _ in sorted(totals.items(), key=lambda item: item[1], reverse=True)[:limit]]
+    if not top_groups:
+        return []
+    periods = make_series(data, frequency, target)[0]
+    if not periods:
+        return []
+    included = set(top_groups)
+    output = []
+    for name in top_groups:
+        by_period = defaultdict(float)
+        for raw_day, value in groups[name].items():
+            by_period[_period_start(date.fromisoformat(raw_day), frequency)] += value
+        output.append({"name": str(name), "data": [by_period.get(period, 0.0) for period in periods]})
+    if len(totals) > len(top_groups):
+        remainder = defaultdict(float)
+        for name, by_day in groups.items():
+            if name in included:
+                continue
+            for raw_day, value in by_day.items():
+                remainder[_period_start(date.fromisoformat(raw_day), frequency)] += value
+        output.append({"name": "Các nhóm khác", "data": [remainder.get(period, 0.0) for period in periods]})
+    return output
 
 
 def _lags(frequency: str) -> tuple[list[int], list[int]]:
@@ -543,11 +580,11 @@ def _line_chart(dates, actual, validation_dates, validation_predictions, future_
             xlabels.append(f"<text x='{x:.1f}' y='{height-12}' text-anchor='middle' fill='#76859a' font-size='11'>{chart_dates[index].strftime('%d %b %y')}</text>")
     unit = value_label or ("giá trị" if target == "Revenue" else "số lượng")
     return f"""<div style='font:12px Arial,sans-serif;background:white;border-radius:12px;overflow:auto'>
-    <div style='display:flex;gap:18px;padding:8px 10px;color:#52647d'><span style='color:#3278df'>● Thực tế</span><span style='color:#f07843'>● Dự báo kiểm tra / tương lai</span></div>
+    <div style='display:flex;gap:18px;padding:8px 10px;color:#52647d'><span style='color:{CHART_COLORS[0]}'>● Thực tế</span><span style='color:{CHART_COLORS[1]}'>● Dự báo kiểm tra / tương lai</span></div>
     <svg viewBox='0 0 {width} {height}' width='100%' role='img' aria-label='Biểu đồ doanh số thực tế và dự báo'>
-    {''.join(grids)}<path d='{actual_path}' fill='none' stroke='#3278df' stroke-width='2.6'/>
-    <path d='{validation_path}' fill='none' stroke='#ed8150' stroke-width='2.3' stroke-dasharray='5 4'/>
-    <path d='{future_path}' fill='none' stroke='#ed8150' stroke-width='3'/>{''.join(xlabels)}</svg>
+    {''.join(grids)}<path d='{actual_path}' fill='none' stroke='{CHART_COLORS[0]}' stroke-width='2.6'/>
+    <path d='{validation_path}' fill='none' stroke='{CHART_COLORS[1]}' stroke-width='2.3' stroke-dasharray='5 4'/>
+    <path d='{future_path}' fill='none' stroke='{CHART_COLORS[1]}' stroke-width='3'/>{''.join(xlabels)}</svg>
     <div style='padding:0 12px 10px;color:#718096'>Đơn vị: {unit}</div></div>"""
 
 
@@ -557,8 +594,49 @@ def _country_chart(data, money_format=_money):
     rows = []
     for country, value in entries:
         width = max(1, value / max_value * 100)
-        rows.append(f"<div style='display:grid;grid-template-columns:95px 1fr 72px;align-items:center;gap:8px;margin:10px 0;font:12px Arial;color:#45566f'><span style='overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>{escape(country)}</span><div style='height:12px;background:#edf3fa;border-radius:8px'><div style='height:12px;width:{width:.1f}%;background:#4d91e8;border-radius:8px'></div></div><span style='text-align:right'>{escape(money_format(value))}</span></div>")
+        rows.append(f"<div style='display:grid;grid-template-columns:95px 1fr 72px;align-items:center;gap:8px;margin:10px 0;font:12px Arial;color:#45566f'><span style='overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>{escape(country)}</span><div style='height:12px;background:#edf3fa;border-radius:8px'><div style='height:12px;width:{width:.1f}%;background:{CHART_COLORS[0]};border-radius:8px'></div></div><span style='text-align:right'>{escape(money_format(value))}</span></div>")
     return "<div style='padding:6px 4px;background:white'>" + "".join(rows) + "</div>"
+
+
+def _moving_average(values, window):
+    """Return a trailing moving average aligned with the original series."""
+    result = []
+    for index in range(len(values)):
+        sample = values[max(0, index - window + 1):index + 1]
+        result.append(sum(sample) / len(sample))
+    return result
+
+
+def _trend_assessment(values, dates, format_value, target_label):
+    if len(values) < 2:
+        return "Chưa có đủ hai kỳ để nhận xét xu hướng."
+    split = max(1, len(values) // 2)
+    earlier = values[:split]
+    recent = values[split:]
+    earlier_avg = sum(earlier) / len(earlier)
+    recent_avg = sum(recent) / len(recent)
+    if earlier_avg > 0:
+        change = (recent_avg / earlier_avg - 1) * 100
+        direction = "tăng" if change > 1 else "giảm" if change < -1 else "đi ngang"
+        comparison = f"Bình quân nửa sau {direction} {abs(change):.1f}% so với nửa đầu ({format_value(recent_avg)} so với {format_value(earlier_avg)} mỗi kỳ)."
+    else:
+        comparison = f"Bình quân nửa đầu là {format_value(earlier_avg)} và nửa sau là {format_value(recent_avg)} mỗi kỳ; không tính phần trăm thay đổi khi mức nền không dương."
+    peak_index = max(range(len(values)), key=values.__getitem__)
+    peak_date = dates[peak_index].strftime("%d/%m/%Y") if dates and peak_index < len(dates) else f"kỳ {peak_index + 1}"
+    return f"{comparison} Mức {target_label.lower()} cao nhất là {format_value(values[peak_index])} vào {peak_date}."
+
+
+def _group_assessment(items, group_label, format_value):
+    ranked = sorted(((str(name), float(value)) for name, value in items if value >= 0),
+                    key=lambda item: item[1], reverse=True)
+    positive_total = sum(value for _, value in ranked)
+    if not ranked or positive_total <= 0:
+        return "Chưa đủ dữ liệu dương để đánh giá mức đóng góp giữa các nhóm."
+    leader, leader_value = ranked[0]
+    top_three = sum(value for _, value in ranked[:3]) / positive_total * 100
+    leader_share = leader_value / positive_total * 100
+    return (f"{leader} dẫn đầu với {format_value(leader_value)}, chiếm {leader_share:.1f}% tổng {group_label.lower()}. "
+            f"Ba nhóm lớn nhất đóng góp {top_three:.1f}% tổng giá trị.")
 
 
 def _rossmann_table(headers, rows):
@@ -580,7 +658,7 @@ def _weekday_month_matrix(daily_values):
     return names, months, cells
 
 
-def _echarts_option(labels, values, chart_type, *, secondary=None, matrix=None, title=""):
+def _echarts_option(labels, values, chart_type, *, secondary=None, matrix=None, title="", reference_total=None, area_series=None):
     """Build a JSON-only ECharts option so charts render natively in Streamlit."""
     entries = [(str(label), float(value)) for label, value in zip(labels, values)
                if math.isfinite(float(value))]
@@ -589,21 +667,39 @@ def _echarts_option(labels, values, chart_type, *, secondary=None, matrix=None, 
         entries = [entries[index] for index in indexes]
         if secondary is not None:
             secondary = [secondary[index] for index in indexes if index < len(secondary)]
+        if area_series:
+            area_series = [{**item, "data": [item["data"][index] for index in indexes if index < len(item["data"])]}
+                           for item in area_series]
     shown_labels = [label for label, _ in entries]
     shown_values = [value for _, value in entries]
     option = {
+        "color": CHART_COLORS,
         "title": {"text": title, "left": 18, "top": 8, "textStyle": {"fontSize": 15, "fontWeight": 600}},
         "tooltip": {"trigger": "axis", "valueFormatter": "%,.0f"},
         "grid": {"left": 68, "right": 28, "top": 58, "bottom": 58, "containLabel": True},
         "animation": False,
     }
-    if chart_type in ("Đường", "Vùng"):
+    if chart_type in ("Đường", "Vùng", "Đường + trung bình trượt"):
+        if chart_type == "Vùng" and area_series and len(area_series) > 1:
+            series = [{"name": item["name"], "type": "line", "stack": "total", "smooth": True,
+                       "showSymbol": False, "data": item["data"], "areaStyle": {"opacity": .88},
+                       "lineStyle": {"width": 1}}
+                      for item in area_series]
+        else:
+            series = [{"name": title or "Thực tế", "type": "line", "smooth": True, "showSymbol": len(shown_values) < 50,
+                       "data": shown_values, "areaStyle": {"opacity": .28} if chart_type == "Vùng" else None,
+                       "lineStyle": {"width": 3}}]
+        if chart_type == "Đường + trung bình trượt" and secondary is not None:
+            average_values = [float(value) for value in secondary]
+            series.append({"name": "Trung bình trượt", "type": "line", "smooth": True, "showSymbol": False,
+                           "data": average_values, "lineStyle": {"width": 2, "type": "dashed"},
+                           "itemStyle": {"color": CHART_COLORS[1]}})
         option.update({"xAxis": {"type": "category", "data": shown_labels, "boundaryGap": False},
                        "yAxis": {"type": "value", "name": "Giá trị"},
                        "dataZoom": [{"type": "inside"}, {"type": "slider", "height": 18, "bottom": 8}],
-                       "series": [{"name": title, "type": "line", "smooth": True, "showSymbol": len(shown_values) < 50,
-                                   "data": shown_values, "areaStyle": {"opacity": .2} if chart_type == "Vùng" else None,
-                                   "lineStyle": {"width": 3}, "itemStyle": {"color": "#2584e8"}}]})
+                       **({"legend": {"top": 30}, "grid": {"left": 68, "right": 28, "top": 78, "bottom": 58, "containLabel": True}}
+                          if len(series) > 1 else {}),
+                       "series": series})
     elif chart_type in ("Cột", "Thanh ngang"):
         horizontal = chart_type == "Thanh ngang"
         shown = sorted(zip(shown_labels, shown_values), key=lambda row: row[1], reverse=True)[:30]
@@ -611,12 +707,49 @@ def _echarts_option(labels, values, chart_type, *, secondary=None, matrix=None, 
         option.update({"grid": {"left": 130 if horizontal else 68, "right": 34, "top": 58, "bottom": 48, "containLabel": True},
                        "xAxis": {"type": "value" if horizontal else "category", **({} if horizontal else {"data": cat})},
                        "yAxis": {"type": "category" if horizontal else "value", **({"data": cat, "inverse": True} if horizontal else {})},
-                       "series": [{"type": "bar", "data": vals, "itemStyle": {"color": "#2584e8", "borderRadius": [4, 4, 0, 0] if not horizontal else [0, 4, 4, 0]}, "barMaxWidth": 38}]})
+                       "series": [{"type": "bar", "data": vals, "itemStyle": {"color": CHART_COLORS[0], "borderRadius": [4, 4, 0, 0] if not horizontal else [0, 4, 4, 0]}, "barMaxWidth": 38}]})
     elif chart_type == "Tròn":
-        items = sorted(zip(shown_labels, shown_values), key=lambda row: row[1], reverse=True)[:10]
+        items = sorted(((label, value) for label, value in zip(shown_labels, shown_values) if value > 0),
+                       key=lambda row: row[1], reverse=True)[:10]
+        displayed_total = sum(value for _, value in items)
+        if reference_total is not None and reference_total > displayed_total:
+            items.append(("Nhóm khác", reference_total - displayed_total))
         option.update({"tooltip": {"trigger": "item", "valueFormatter": "%,.0f"}, "legend": {"orient": "vertical", "left": "55%", "top": "middle"},
                        "series": [{"type": "pie", "radius": ["38%", "72%"], "center": ["32%", "55%"], "data": [{"name": label, "value": value} for label, value in items],
                                    "label": {"formatter": "{b}: {d}%"}}]})
+    elif chart_type == "Tỷ trọng (%)":
+        items = sorted(((label, value) for label, value in zip(shown_labels, shown_values) if value > 0),
+                       key=lambda row: row[1], reverse=True)[:30]
+        denominator = reference_total if reference_total is not None else sum(value for _, value in items)
+        shares = [value / denominator * 100 if denominator else 0 for _, value in items]
+        option.update({"grid": {"left": 130, "right": 34, "top": 58, "bottom": 48, "containLabel": True},
+                       "tooltip": {"trigger": "axis", "formatter": "{b0}<br/>{a0}: {c0}%"},
+                       "xAxis": {"type": "value", "name": "% tổng", "axisLabel": {"formatter": "{value}%"}},
+                       "yAxis": {"type": "category", "data": [item[0] for item in items], "inverse": True},
+                       "series": [{"name": "Tỷ trọng", "type": "bar", "data": shares,
+                                   "label": {"show": True, "position": "right", "formatter": "{c}%"},
+                                   "itemStyle": {"color": CHART_COLORS[2], "borderRadius": [0, 4, 4, 0]}}]})
+    elif chart_type == "Pareto":
+        items = sorted(((label, value) for label, value in zip(shown_labels, shown_values) if value > 0),
+                       key=lambda row: row[1], reverse=True)[:30]
+        denominator = reference_total if reference_total is not None else sum(value for _, value in items)
+        cumulative = []
+        running = 0.0
+        for _, value in items:
+            running += value
+            cumulative.append(running / denominator * 100 if denominator else 0)
+        categories = [item[0] for item in items]
+        option.update({"legend": {"top": 32, "data": ["Giá trị", "Tích lũy"]},
+                       "grid": {"left": 68, "right": 62, "top": 72, "bottom": 72, "containLabel": True},
+                       "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
+                       "xAxis": {"type": "category", "data": categories, "axisLabel": {"rotate": 25}},
+                       "yAxis": [{"type": "value", "name": "Giá trị"},
+                                 {"type": "value", "name": "Tích lũy (%)", "min": 0, "max": 100, "axisLabel": {"formatter": "{value}%"}}],
+                       "series": [{"name": "Giá trị", "type": "bar", "data": [item[1] for item in items],
+                                   "itemStyle": {"color": CHART_COLORS[0], "borderRadius": [4, 4, 0, 0]}},
+                                  {"name": "Tích lũy", "type": "line", "yAxisIndex": 1, "data": cumulative,
+                                   "symbolSize": 7, "lineStyle": {"width": 3, "color": CHART_COLORS[1]},
+                                   "itemStyle": {"color": CHART_COLORS[1]}}]})
     elif chart_type == "Treemap":
         items = sorted(zip(shown_labels, shown_values), key=lambda row: row[1], reverse=True)[:30]
         option.update({"tooltip": {"valueFormatter": "%,.0f"}, "series": [{"type": "treemap", "roam": False, "breadcrumb": {"show": False}, "data": [{"name": label, "value": value} for label, value in items],
@@ -627,7 +760,7 @@ def _echarts_option(labels, values, chart_type, *, secondary=None, matrix=None, 
         option.update({"tooltip": {"trigger": "item", "formatter": "X: {@[0]}<br/>Y: {@[1]}"},
                        "xAxis": {"type": "value", "name": "Số lượng / khách hàng", "scale": True},
                        "yAxis": {"type": "value", "name": "Doanh thu", "scale": True},
-                       "series": [{"type": "scatter", "data": points, "symbolSize": 8, "itemStyle": {"color": "#2584e8", "opacity": .65}}]})
+                       "series": [{"type": "scatter", "data": points, "symbolSize": 8, "itemStyle": {"color": CHART_COLORS[0], "opacity": .65}}]})
     elif chart_type == "Histogram":
         if not shown_values:
             return option
@@ -639,7 +772,7 @@ def _echarts_option(labels, values, chart_type, *, secondary=None, matrix=None, 
             counts[min(bin_count - 1, int((value - low) / span * bin_count))] += 1
         bin_labels = [f"{low + i*span/bin_count:,.0f}–{low + (i+1)*span/bin_count:,.0f}" for i in range(bin_count)]
         option.update({"tooltip": {"trigger": "axis"}, "xAxis": {"type": "category", "data": bin_labels, "axisLabel": {"rotate": 25}},
-                       "yAxis": {"type": "value", "name": "Số kỳ"}, "series": [{"type": "bar", "data": counts, "itemStyle": {"color": "#16a085"}}]})
+                       "yAxis": {"type": "value", "name": "Số kỳ"}, "series": [{"type": "bar", "data": counts, "itemStyle": {"color": CHART_COLORS[2]}}]})
     elif chart_type == "Heatmap" and matrix:
         row_labels, col_labels, cells = matrix
         flat_values = [value for row in cells for value in row]
@@ -691,11 +824,11 @@ def _rossmann_line_chart(dates, values, validation_dates, validation_predictions
             x, _ = point(index, low)
             xlabels.append(f"<text x='{x:.1f}' y='{height-12}' text-anchor='middle' fill='#718096' font-size='11'>{all_dates[index].strftime('%d %b %y')}</text>")
     return f"""<div style='font:12px Arial,sans-serif;background:white;border-radius:12px'>
-    <div style='display:flex;gap:16px;padding:8px 10px;color:#53647a'><span style='color:#2563eb'>● Thực tế</span><span style='color:#f97316'>● Dự báo kiểm tra / tương lai</span></div>
+    <div style='display:flex;gap:16px;padding:8px 10px;color:#53647a'><span style='color:{CHART_COLORS[0]}'>● Thực tế</span><span style='color:{CHART_COLORS[1]}'>● Dự báo kiểm tra / tương lai</span></div>
     <svg viewBox='0 0 {width} {height}' width='100%' role='img' aria-label='Doanh thu thực tế và dự báo theo ngày'>
-    {''.join(grid)}<path d='{actual_path}' fill='none' stroke='#2563eb' stroke-width='2.5'/>
-    <path d='{validation_path}' fill='none' stroke='#f97316' stroke-width='2.2' stroke-dasharray='5 4'/>
-    <path d='{forecast_path}' fill='none' stroke='#f97316' stroke-width='3'/>{''.join(xlabels)}</svg>
+    {''.join(grid)}<path d='{actual_path}' fill='none' stroke='{CHART_COLORS[0]}' stroke-width='2.5'/>
+    <path d='{validation_path}' fill='none' stroke='{CHART_COLORS[1]}' stroke-width='2.2' stroke-dasharray='5 4'/>
+    <path d='{forecast_path}' fill='none' stroke='{CHART_COLORS[1]}' stroke-width='3'/>{''.join(xlabels)}</svg>
     <div style='padding:0 12px 10px;color:#718096'>Doanh thu theo đơn vị trong dataset</div></div>"""
 
 
@@ -706,7 +839,7 @@ def _rossmann_store_bars(summary, highest=True):
     for store_id, row in ordered:
         width = max(1, row["sales"] / high * 100)
         elements.append(f"<div style='display:grid;grid-template-columns:70px 1fr 85px;gap:8px;align-items:center;margin:8px 0;font:12px Arial;color:#43536a'>"
-                        f"<span>Cửa hàng {escape(store_id)}</span><div style='height:12px;background:#edf2f8;border-radius:8px'><div style='height:12px;width:{width:.1f}%;background:#2563eb;border-radius:8px'></div></div>"
+                        f"<span>Cửa hàng {escape(store_id)}</span><div style='height:12px;background:#edf2f8;border-radius:8px'><div style='height:12px;width:{width:.1f}%;background:{CHART_COLORS[0]};border-radius:8px'></div></div>"
                         f"<span style='text-align:right'>{row['sales']:,.0f}</span></div>")
     return "<div style='background:white;padding:4px'>" + "".join(elements) + "</div>"
 
@@ -718,7 +851,7 @@ def _importance_chart(importance):
     for item in strongest:
         width = item["importance"] / max_value * 100
         rows.append(f"<div style='display:grid;grid-template-columns:190px 1fr 58px;gap:8px;align-items:center;margin:8px 0;font:12px Arial;color:#43536a'>"
-                    f"<span>{escape(item['feature'])}</span><div style='height:11px;background:#edf2f8;border-radius:7px'><div style='height:11px;width:{width:.1f}%;background:#2563eb;border-radius:7px'></div></div>"
+                    f"<span>{escape(item['feature'])}</span><div style='height:11px;background:#edf2f8;border-radius:7px'><div style='height:11px;width:{width:.1f}%;background:{CHART_COLORS[0]};border-radius:7px'></div></div>"
                     f"<span style='text-align:right'>{item['importance']:.1f}%</span></div>")
     return "<div style='background:white;padding:6px'>" + "".join(rows) + "</div>"
 
@@ -729,7 +862,7 @@ def _weekday_bars(profile):
     for item in profile:
         height = max(3, item["average"] / high * 100)
         columns.append(f"<div style='flex:1;text-align:center;font:11px Arial;color:#53647a'>"
-                       f"<div style='height:130px;display:flex;align-items:end;justify-content:center'><div title='{item['average']:,.0f}' style='width:65%;height:{height:.1f}%;background:#3b82f6;border-radius:5px 5px 0 0'></div></div>"
+                       f"<div style='height:130px;display:flex;align-items:end;justify-content:center'><div title='{item['average']:,.0f}' style='width:65%;height:{height:.1f}%;background:{CHART_COLORS[0]};border-radius:5px 5px 0 0'></div></div>"
                        f"<div style='margin-top:7px'>{item['day']}</div><div style='color:#8592a5'>{item['average']:,.0f}</div></div>")
     return "<div style='display:flex;gap:8px;align-items:end;background:white;padding:10px'>" + "".join(columns) + "</div>"
 
@@ -841,6 +974,31 @@ def _rossmann_group_series(data, store_ids, start, end, frequency, field="sales"
     return result_dates, [totals[day] for day in result_dates]
 
 
+def _rossmann_area_series(data, store_ids, start, end, frequency, field="sales", limit=6):
+    """Build stacked area series for the largest stores in the selected date range."""
+    store_totals = _rossmann_totals(data, store_ids, start, end, field)
+    top_ids = [sid for sid, _ in sorted(store_totals.items(), key=lambda item: item[1], reverse=True)[:limit]]
+    periods = sorted({_period_start(data["dates"][index], frequency) for index in range(start, end + 1)})
+    if not periods:
+        return []
+    result = []
+    for sid in top_ids:
+        by_period = defaultdict(float)
+        for index in range(start, end + 1):
+            by_period[_period_start(data["dates"][index], frequency)] += data["stores"][sid][field][index]
+        result.append({"name": f"Cửa hàng {sid}", "data": [by_period.get(period, 0.0) for period in periods]})
+    if len(store_totals) > len(top_ids):
+        selected = set(top_ids)
+        remainder = defaultdict(float)
+        for sid in store_ids:
+            if sid in selected:
+                continue
+            for index in range(start, end + 1):
+                remainder[_period_start(data["dates"][index], frequency)] += data["stores"][sid][field][index]
+        result.append({"name": "Các cửa hàng khác", "data": [remainder.get(period, 0.0) for period in periods]})
+    return result
+
+
 def _rossmann_group_profile(data, store_ids, start, end, field="sales"):
     labels = ["Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "Chủ nhật"]
     buckets = [[] for _ in range(7)]
@@ -933,6 +1091,16 @@ def _render_rossmann(data):
     store_info = data["metadata"].get(store_id, {})
     store_label = f"Cửa hàng {store_id} · {store_info.get('City', '—')} · loại {store_info.get('StoreType', '—')}"
     visible_days = {"90 ngày": 90, "180 ngày": 180, "Toàn bộ": len(dates)}[history_window]
+    rossmann_trend_assessment = _trend_assessment(group_sales, group_dates, lambda value: f"{value:,.0f}", "doanh thu")
+    rossmann_group_assessment = _group_assessment(filtered_totals.items(), "cửa hàng", lambda value: f"{value:,.0f}")
+    recent_sales = selected_store["sales"][-min(horizon, len(selected_store["sales"])):]
+    recent_sales_average = sum(recent_sales) / len(recent_sales) if recent_sales else 0
+    future_sales_average = sum(selected["forecast"]) / len(selected["forecast"]) if selected["forecast"] else 0
+    rossmann_forecast_assessment = (f"Cửa hàng {store_id} dự báo bình quân {future_sales_average:,.0f} mỗi ngày, "
+                                    f"so với {recent_sales_average:,.0f} trong {len(recent_sales)} ngày gần nhất.")
+    if recent_sales_average:
+        forecast_change = (future_sales_average / recent_sales_average - 1) * 100
+        rossmann_forecast_assessment += f" Mức dự báo {('cao hơn' if forecast_change > 1 else 'thấp hơn' if forecast_change < -1 else 'gần bằng')} {abs(forecast_change):.1f}%."
 
     def overview_page():
         _page_header("SalesPulse · Tổng quan", "Bức tranh bán hàng cho phạm vi bộ lọc đang chọn.")
@@ -959,6 +1127,10 @@ def _render_rossmann(data):
             st.metric("Ngày có khuyến mãi", f"{group_promo['promo_avg']:,.0f}", f"{group_promo['promo_count']:,} ngày cửa hàng mở")
             st.metric("Ngày thường", f"{group_promo['regular_avg']:,.0f}", f"{group_promo['regular_count']:,} ngày cửa hàng mở")
             st.caption(f"Chênh lệch trung bình: {group_promo['uplift']:+.1f}%. Đây là so sánh mô tả, không chứng minh quan hệ nhân quả.")
+        with st.container(border=True):
+            st.subheader("Đánh giá nhanh")
+            st.markdown(f"- **Xu hướng:** {rossmann_trend_assessment}\n- **Cơ cấu cửa hàng:** {rossmann_group_assessment}\n- **Dự báo:** {rossmann_forecast_assessment}")
+            st.caption(f"WAPE holdout của mô hình {selected_model} là {selected['metrics']['wape']:.1f}%; số liệu mô tả dùng phạm vi ngày và cửa hàng đã lọc.")
 
     def trends_page():
         _page_header("Xu hướng", "Chọn chỉ tiêu và mức gộp để xem hành vi bán hàng theo thời gian.")
@@ -988,17 +1160,30 @@ def _render_rossmann(data):
         chart_type = None
         labels, values = [], []
         secondary, matrix = None, None
+        area_series = None
         table_rows = []
         if view == "Xu hướng theo thời gian":
             labels, values = _rossmann_group_series(data, store_ids, start, end, filters["frequency"], target_field)
-            labels = [day.strftime("%Y-%m-%d") for day in labels]
-            chart_type = st.selectbox("Kiểu biểu đồ", ["Đường", "Vùng", "Cột", "Bảng"])
+            chart_dates = labels
+            labels = [day.strftime("%Y-%m-%d") for day in chart_dates]
+            chart_type = st.selectbox("Kiểu biểu đồ", ["Đường", "Đường + trung bình trượt", "Vùng", "Cột", "Bảng"])
+            if chart_type == "Vùng":
+                area_series = _rossmann_area_series(data, store_ids, start, end, filters["frequency"], target_field)
+            if chart_type == "Đường + trung bình trượt" and values:
+                default_window = min(7 if filters["frequency"] == "Ngày" else 4, len(values))
+                if len(values) > 1:
+                    window = st.slider("Cửa sổ trung bình trượt (kỳ)", 2, min(30, len(values)),
+                                       value=max(2, default_window), key="rossmann_moving_average_window")
+                    secondary = _moving_average(values, window)
+                else:
+                    secondary = values
             table_rows = [[label, f"{value:,.0f}"] for label, value in zip(labels, values)]
         elif view == "So sánh cửa hàng":
             totals = _rossmann_totals(data, store_ids, start, end, target_field)
             ordered = sorted(totals.items(), key=lambda item: item[1], reverse=True)[:20]
             labels, values = [f"Cửa hàng {sid}" for sid, _ in ordered], [value for _, value in ordered]
-            chart_type = st.selectbox("Kiểu biểu đồ", ["Thanh ngang", "Cột", "Tròn", "Treemap", "Bảng"])
+            group_total = sum(value for value in totals.values() if value > 0)
+            chart_type = st.selectbox("Kiểu biểu đồ", ["Thanh ngang", "Cột", "Tròn", "Treemap", "Tỷ trọng (%)", "Pareto", "Bảng"])
             table_rows = [[label, f"{value:,.0f}"] for label, value in zip(labels, values)]
         elif view == "Phân bố doanh thu ngày":
             labels, values = [str(i + 1) for i in range(start, end + 1)], [sum(data["stores"][sid]["sales"][i] for sid in store_ids) for i in range(start, end + 1)]
@@ -1026,8 +1211,19 @@ def _render_rossmann(data):
             st.html(_rossmann_table(["Nhóm / kỳ", target_label], table_rows))
         else:
             with st.container(border=True):
-                st.echarts_chart(_echarts_option(labels, values, chart_type, secondary=secondary, matrix=matrix, title=f"{view} · {target_label}"),
+                st.echarts_chart(_echarts_option(labels, values, chart_type, secondary=secondary, matrix=matrix,
+                                                 title=f"{view} · {target_label}",
+                                                 reference_total=group_total if view == "So sánh cửa hàng" else None,
+                                                 area_series=area_series),
                                 height=430, alt=f"{view} theo {target_label.lower()}")
+        if view == "Xu hướng theo thời gian":
+            st.info(_trend_assessment(values, chart_dates, lambda value: f"{value:,.0f}", target_label))
+            if chart_type == "Đường + trung bình trượt":
+                st.caption(f"Trung bình trượt làm mượt dao động ngắn hạn trên cửa sổ {window if len(values) > 1 else 1} kỳ; đường này không thay thế chuỗi thực tế.")
+        elif view == "So sánh cửa hàng":
+            st.info(_group_assessment(totals.items(), "cửa hàng", lambda value: f"{value:,.0f}"))
+            if chart_type in ("Pareto", "Tỷ trọng (%)"):
+                st.caption("Tỷ trọng tính trên tổng của các cửa hàng đang được lọc; biểu đồ chỉ hiển thị 20 cửa hàng dẫn đầu.")
         if view == "Doanh thu và khách hàng":
             st.caption("Trục ngang là số khách hàng; trục dọc là doanh thu. Mỗi chấm đại diện một ngày trong khoảng lọc.")
         elif view == "Phân bố doanh thu ngày":
@@ -1144,6 +1340,17 @@ def _render_uploaded_pages(data, frequency, horizon, model_name, target):
     currency = data.get("currency", "")
     money_format = lambda value: f"{currency}{value:,.0f}"
     format_value = money_format if money else lambda value: f"{value:,.0f}"
+    trend_assessment = _trend_assessment(values, dates, format_value, target_label)
+    group_total = sum(value for value in selected_market_values.values() if value > 0)
+    group_assessment = _group_assessment(selected_market_values.items(), data.get("market_label", "Nhóm"), format_value)
+    recent_periods = values[-min(horizon, len(values)):]
+    recent_average = sum(recent_periods) / len(recent_periods) if recent_periods else 0
+    forecast_average = prediction_total / len(future_predictions) if future_predictions else 0
+    forecast_comparison = (f"Bình quân dự báo {format_value(forecast_average)} mỗi kỳ, "
+                           f"so với {format_value(recent_average)} trong {len(recent_periods)} kỳ gần nhất.")
+    if recent_average:
+        forecast_change = (forecast_average / recent_average - 1) * 100
+        forecast_comparison += f" Mức dự báo {('cao hơn' if forecast_change > 1 else 'thấp hơn' if forecast_change < -1 else 'gần bằng')} {abs(forecast_change):.1f}%."
 
     def overview_page():
         _page_header("SalesPulse · Tổng quan", f"Phân tích file {data.get('source', 'đã tải lên')}.")
@@ -1170,6 +1377,10 @@ def _render_uploaded_pages(data, frequency, horizon, model_name, target):
             st.metric("WAPE", f"{metrics['wape']:.1%}")
             st.metric("RMSE", format_value(metrics["rmse"]))
             st.caption(f"Đánh giá trên {metrics['holdout']} kỳ cuối theo thời gian.")
+        with st.container(border=True):
+            st.subheader("Đánh giá nhanh")
+            st.markdown(f"- **Xu hướng:** {trend_assessment}\n- **Cơ cấu nhóm:** {group_assessment}\n- **Dự báo:** {forecast_comparison}")
+            st.caption(f"Trong kỳ kiểm tra, WAPE là {metrics['wape']:.1%}; tổng sai số tuyệt đối tương đương khoảng {metrics['wape']:.1%} tổng giá trị thực tế ở các kỳ holdout.")
 
     def trends_page():
         _page_header("Xu hướng", "Xem lịch sử bán hàng và các kỳ gần nhất.")
@@ -1196,16 +1407,27 @@ def _render_uploaded_pages(data, frequency, horizon, model_name, target):
         target_daily = data["daily_revenue"] if target_key == "Revenue" else data["daily_quantity"]
         target_market = data["country_revenue"] if target_key == "Revenue" else data["country_quantity"]
         chart_type, secondary, matrix = None, None, None
+        area_series = None
         labels, values, table_rows = [], [], []
         if view == "Xu hướng theo thời gian":
             chart_dates, chart_values = make_series(data, frequency, target_key)
             labels, values = [day.isoformat() for day in chart_dates], chart_values
-            chart_type = st.selectbox("Kiểu biểu đồ", ["Đường", "Vùng", "Cột", "Bảng"])
+            chart_type = st.selectbox("Kiểu biểu đồ", ["Đường", "Đường + trung bình trượt", "Vùng", "Cột", "Bảng"])
+            if chart_type == "Vùng" and data.get("has_group"):
+                area_series = _uploaded_area_series(data, frequency, target_key)
+            if chart_type == "Đường + trung bình trượt" and chart_values:
+                default_window = min(7 if frequency == "Ngày" else 4, len(chart_values))
+                if len(chart_values) > 1:
+                    window = st.slider("Cửa sổ trung bình trượt (kỳ)", 2, min(30, len(chart_values)),
+                                       value=max(2, default_window), key="upload_moving_average_window")
+                    secondary = _moving_average(chart_values, window)
+                else:
+                    secondary = chart_values
             table_rows = [[label, format_value(value)] for label, value in zip(labels, values)]
         elif view == "So sánh theo thị trường":
             sorted_markets = sorted(target_market.items(), key=lambda item: item[1], reverse=True)[:20]
             labels, values = [item[0] for item in sorted_markets], [item[1] for item in sorted_markets]
-            chart_type = st.selectbox("Kiểu biểu đồ", ["Thanh ngang", "Cột", "Tròn", "Treemap", "Bảng"])
+            chart_type = st.selectbox("Kiểu biểu đồ", ["Thanh ngang", "Cột", "Tròn", "Treemap", "Tỷ trọng (%)", "Pareto", "Bảng"])
             table_rows = [[label, format_value(value)] for label, value in zip(labels, values)]
         elif view == "Phân bố theo kỳ":
             chart_dates, chart_values = make_series(data, frequency, target_key)
@@ -1228,8 +1450,19 @@ def _render_uploaded_pages(data, frequency, horizon, model_name, target):
             st.html(_rossmann_table(["Thị trường / kỳ", target_label], table_rows))
         else:
             with st.container(border=True):
-                st.echarts_chart(_echarts_option(labels, values, chart_type, secondary=secondary, matrix=matrix, title=f"{view} · {target_label}"),
+                st.echarts_chart(_echarts_option(labels, values, chart_type, secondary=secondary, matrix=matrix,
+                                                 title=f"{view} · {target_label}",
+                                                 reference_total=group_total if view == "So sánh theo thị trường" else None,
+                                                 area_series=area_series),
                                 height=430, alt=f"{view} theo {target_label.lower()}")
+        if view == "Xu hướng theo thời gian":
+            st.info(_trend_assessment(chart_values, chart_dates, format_value, target_label))
+            if chart_type == "Đường + trung bình trượt":
+                st.caption(f"Trung bình trượt làm mượt dao động ngắn hạn trên cửa sổ {window if len(chart_values) > 1 else 1} kỳ; đường này không thay thế chuỗi thực tế.")
+        elif view == "So sánh theo thị trường":
+            st.info(_group_assessment(target_market.items(), data.get("market_label", "Nhóm"), format_value))
+            if chart_type in ("Pareto", "Tỷ trọng (%)"):
+                st.caption("Tỷ trọng tính trên tổng của tất cả nhóm; biểu đồ chỉ hiển thị 20 nhóm dẫn đầu theo giá trị.")
         if view == relation_label:
             st.caption(f"Mỗi chấm là một ngày; trục ngang là {data.get('quantity_label', 'số lượng')} và trục dọc là {data.get('metric_label', 'chỉ tiêu')}.")
         elif view == "Phân bố theo kỳ":
